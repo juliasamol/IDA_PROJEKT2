@@ -1,0 +1,312 @@
+# Instrukcja: dbt Cloud – konfiguracja i zadania laboratoryjne (SCD1 i SCD2)
+
+Instrukcja opisuje, jak założyć konto w dbt Cloud, utworzyć w nim projekt, połączyć go z istniejącym projektem w BigQuery oraz z istniejącym repozytorium na GitHubie, sprawdzić, czy konfiguracja działa, a następnie wykonać zadania laboratoryjne: zamodelować dane w dwóch wariantach historyzacji (SCD typu 1 i typu 2).
+
+## Czym jest dbt?
+
+**dbt (data build tool)** to narzędzie do transformacji danych bezpośrednio w hurtowni danych (tutaj: w BigQuery) za pomocą zwykłego SQL-a. Każdą transformację zapisujesz jako *model* – plik `.sql` zawierający zapytanie `SELECT`. dbt zamienia taki plik w obiekt w bazie (widok lub tabelę), sam ustala kolejność budowania modeli zależnych od siebie oraz pozwala testować i dokumentować dane. **dbt Cloud** to wersja chmurowa narzędzia: działa w przeglądarce (ma wbudowane środowisko do pisania i uruchamiania modeli), nie wymaga instalacji niczego na komputerze i współpracuje z repozytorium Git, w którym przechowywany jest kod projektu.
+
+> Nazwy przycisków i opcji w dbt Cloud, GitHubie i konsoli Google Cloud mogą się nieznacznie różnić od opisanych poniżej (interfejsy są często aktualizowane). Sens kroków pozostaje ten sam.
+
+**Wymagania wstępne (to musisz mieć przed rozpoczęciem):**
+
+- projekt w BigQuery Sandbox – zapisz jego **Project ID** oraz **lokalizację** datasetów (np. `EU`),
+- konto na GitHubie z utworzonym repozytorium (zalecane: z plikiem README, dzięki któremu istnieje gałąź `main`),
+- własna tabela źródłowa w BigQuery (w Twoim projekcie i datasecie), zawierająca kolumnę identyfikującą rekord (klucz biznesowy) oraz kolumnę z datą i godziną ostatniej modyfikacji rekordu (w przykładach: `updated_at`) – posłuży Ci jako źródło danych w zadaniach laboratoryjnych,
+- klucz konta serwisowego (plik JSON) z dostępem do projektu BigQuery – jeśli go nie masz, wykonaj krok 1.
+
+**Używane oznaczenia (zastąp własnymi wartościami):**
+
+- `<PROJECT_ID>` – identyfikator projektu w BigQuery (np. `ib-grupa1-123456`)
+- `<DATASET_DBT>` – nazwa datasetu roboczego dla dbt (np. `dbt_grupa1`)
+- `<SCHEMAT_ZRODLOWY>` – nazwa datasetu z Twoją tabelą źródłową
+- `<TABELA>` – nazwa Twojej tabeli źródłowej
+
+---
+
+## Krok 1. Klucz konta serwisowego (jeśli jeszcze go nie masz)
+
+dbt Cloud łączy się z BigQuery za pomocą klucza konta serwisowego (plik JSON).
+
+1. W konsoli Google Cloud wejdź w **IAM & Admin → Service Accounts** (upewnij się, że wybrany jest właściwy projekt).
+2. Kliknij **Create service account**, nadaj nazwę (np. `dbt-cloud`).
+3. Przypisz role:
+   - **BigQuery Data Editor**
+   - **BigQuery Job User**
+   - (opcjonalnie) **BigQuery User** – jeśli pojawią się błędy uprawnień
+4. Zakończ tworzenie, wejdź w utworzone konto → zakładka **Keys** → **Add key → Create new key → JSON**.
+5. Plik JSON zostanie pobrany na dysk. **Traktuj go jak hasło**: nie wysyłaj go nikomu i nie umieszczaj w repozytorium GitHub.
+
+---
+
+## Krok 2. Założenie konta w dbt Cloud
+
+1. Wejdź na https://www.getdbt.com i wybierz rejestrację darmowego konta (plan Developer).
+2. Zarejestruj się (e-mail lub konto Google/GitHub) i potwierdź adres e-mail.
+3. Jeśli kreator automatycznie zaproponuje utworzenie projektu, możesz go użyć. W przeciwnym razie przejdź do **Account settings → Projects → New project**.
+
+---
+
+## Krok 3. Konfiguracja projektu i połączenia z BigQuery
+
+1. Nadaj projektowi nazwę (np. `bigquery-lab`).
+2. W kroku **Connection** wybierz **BigQuery**.
+3. Wgraj plik JSON z kluczem konta serwisowego (przycisk typu *Upload a Service Account JSON file*). Pola `project_id`, `client_email` itp. zostaną uzupełnione automatycznie.
+4. W ustawieniach połączenia ustaw **Location** na tę samą lokalizację, której użyto przy tworzeniu datasetów w BigQuery (np. `EU`).
+5. Zapisz i użyj opcji **Test connection** – powinien pojawić się komunikat o powodzeniu.
+
+---
+
+## Krok 4. Podpięcie repozytorium GitHub
+
+1. W kroku **Repository** wybierz **GitHub**.
+2. Kliknij **Connect GitHub account** i autoryzuj aplikację dbt Cloud na swoim koncie GitHub (wybierz swoje repozytorium, np. tylko to jedno).
+3. Wybierz repozytorium z listy i zapisz.
+
+---
+
+## Krok 5. Dane logowania deweloperskie (Development credentials)
+
+1. Kliknij swój profil w lewym dolnym rogu ekranu, a następnie wybierz **Credentials**. Wszystkie kolejne kroki wykonaj w tym miejscu.
+2. Znajdź swój projekt i uzupełnij **Development credentials**.
+3. W polu **Dataset** wpisz nazwę datasetu roboczego `<DATASET_DBT>` (np. `dbt_grupa1`). Nie musisz go wcześniej tworzyć w BigQuery: dbt utworzy go automatycznie przy pierwszym `dbt run`, w lokalizacji ustawionej w połączeniu (dlatego tak ważne jest poprawne **Location** w kroku 3). Konto serwisowe ma do tego uprawnienia dzięki roli BigQuery Data Editor.
+4. Zapisz i ponownie przetestuj połączenie.
+
+---
+
+## Krok 6. Inicjalizacja projektu dbt w IDE
+
+Poniżej pojawią się trzy pojęcia związane z systemem kontroli wersji Git. Wystarczy rozumieć je w ten sposób:
+
+- **branch (gałąź)** – osobna wersja robocza repozytorium, w której możesz wprowadzać zmiany bez wpływu na główną wersję (`main`),
+- **commit** – zapisanie wprowadzonych zmian wraz z krótkim opisem,
+- **merge (scalenie)** – włączenie zmian z Twojej gałęzi do gałęzi głównej `main`. Na GitHubie robi się to przez tzw. *pull request*.
+
+**Część 1 – inicjalizacja i commit w dbt**
+
+1. Wejdź w **Develop** (dbt Cloud IDE / Studio).
+2. Kliknij **Initialize dbt project** – zostaną utworzone m.in. plik `dbt_project.yml` oraz folder `models/example`.
+3. Kliknij **Commit and sync**. dbt nie pozwala zapisać zmian bezpośrednio na `main`, więc zostaniesz poproszony o utworzenie **nowego brancha** (nadaj mu dowolną nazwę, np. `dev`) oraz o wpisanie opisu commita (np. „initialize dbt project”).
+
+**Część 2 – scalenie brancha z main (pull request)**
+
+4. Po wykonaniu commita w dbt pojawi się przycisk służący do utworzenia pull requesta (np. **Create pull request on GitHub**). Kliknij go – dbt automatycznie otworzy GitHuba z przygotowanym pull requestem, więc nie musisz samodzielnie szukać swojego brancha.
+5. Na GitHubie, jeśli to konieczne, kliknij **Create pull request**, a następnie **Merge pull request** i **Confirm merge**. Zmiany z Twojego brancha trafiły do `main`.
+
+**Część 3 – powrót do dbt i pobranie zmian**
+
+6. Wróć do dbt Cloud (Develop). Wybierz przycisk **Change branch** i przełącz się na gałąź `main`.
+7. Rozwiń strzałkę przy przycisku **Initialize dbt project** i wybierz **Pull from remote**, aby pobrać scalone zmiany z GitHuba.
+8. Jeśli w prawym górnym rogu status wyświetla **Disconnected**, przeładuj stronę (np. klawiszem F5).
+
+**Część 4 – sprawdzenie konfiguracji**
+
+9. Na dole IDE wpisz w wierszu poleceń `dbt run`. Jeśli w BigQuery pojawił się dataset `<DATASET_DBT>` z obiektami z folderu `example`, konfiguracja działa.
+
+> Bezpośredni link do projektu (Develop → Project) warto dodać do zakładek – ułatwi to późniejsze logowanie.
+
+---
+
+## Zadania laboratoryjne
+
+W tej części zbudujesz kilka modeli dbt na podstawie **własnej tabeli** z BigQuery. Pokażą one dwa sposoby przechowywania zmian w danych w czasie:
+
+- **SCD typu 1** (*Slowly Changing Dimension*) – w tabeli zostaje tylko aktualna wersja każdego rekordu, historia zmian jest tracona,
+- **SCD typu 2** – zachowujemy historię zmian: każda wersja rekordu ma datę początku i końca obowiązywania.
+
+Wszystkie kroki wykonujesz w dbt Cloud (Develop / Studio), w katalogu `models`.
+
+**Jak korzystać z przykładów?** Kod w tej części pochodzi z demonstracji prowadzącego, wykonanej na tabeli demonstracyjnej `test` w schemacie `lab3` (kolumny: `id`, `name`, `updated_at`). Twoim zadaniem jest **odtworzyć te kroki dla własnej tabeli**. W przykładach zamień na własne:
+
+- nazwę źródła, schemat (dataset) i tabelę w pliku YAML oraz w funkcji `source()`,
+- `id` – na kolumnę będącą kluczem biznesowym Twojej tabeli,
+- `updated_at` – na kolumnę z datą i godziną modyfikacji rekordu,
+- `name` – na pozostałe kolumny opisowe, które chcesz przenieść do modelu,
+- nazwy modeli (`trf_<tabela>_scd1` itd.) – na nazwy związane z Twoją tabelą.
+
+### Zadanie 1. Nowy branch
+
+Zanim zaczniesz wprowadzać zmiany, utwórz nowy branch (nowa gałąź robocza, patrz krok 6). Upewnij się najpierw, że jesteś na gałęzi `main` ze zaktualizowanym kodem (**Pull from remote**), a następnie użyj opcji tworzenia nowego brancha (np. **Create branch**) i nadaj mu nazwę, np. `lab3`. Wszystkie kolejne zmiany wykonuj na tym branchu.
+
+### Zadanie 2. Zdefiniowanie źródła danych (staging)
+
+1. W folderze `models` utwórz folder `staging` (jeśli go jeszcze nie ma).
+2. W folderze `staging` utwórz plik `_sources_ida.yaml` i wklej poniższy kod. Poniższy kod to przykład z demonstracji (tabela `test` w schemacie `lab3`). **Dostosuj** go do swojego projektu, schematu i tabeli: `database` to Project ID w BigQuery, `schema` to dataset z tabelą źródłową, a `identifier` to rzeczywista nazwa tabeli w BigQuery.
+
+```yaml
+sources:
+  - name: lab3
+    database: inzynieria-danych
+    schema: lab3
+    tables:
+      - name: test
+        identifier: test
+```
+
+**Do czego służy ten plik?** Dane, które będziemy modelować, już istnieją w BigQuery – dbt ich nie tworzy. Plik `_sources_*.yaml` informuje dbt, gdzie te dane leżą, czyli „zaciąga” je do projektu dbt. Poszczególne pola oznaczają:
+
+- `name` (na poziomie źródła) – dowolna, logiczna nazwa grupy źródeł, której później używasz w kodzie modeli,
+- `database` – projekt w BigQuery, `schema` – dataset w BigQuery,
+- `tables` → `name` – nazwa tabeli, której używasz w dbt, a `identifier` – jej faktyczna nazwa w BigQuery (mogą się różnić, wtedy w dbt można używać wygodniejszej nazwy).
+
+Po zdefiniowaniu źródła modele mogą odwoływać się do tabeli za pomocą funkcji `source()` (zobacz zadanie 3).
+
+### Zadanie 3. Model SCD1 – ostatnia wersja każdego rekordu
+
+1. W folderze `models` utwórz folder `transform`.
+2. W folderze `transform` utwórz plik `trf_<tabela>_scd1.sql` (np. `trf_test_scd1.sql` w demonstracji) z poniższym kodem, dostosowanym do Twojej tabeli (nazwa źródła i tabeli jak w pliku YAML, własne kolumny zamiast `id` i `updated_at`):
+
+```sql
+select *
+from {{ source("lab3", "test") }}
+qualify row_number() over (partition by id order by updated_at desc) = 1
+```
+
+**Jak to działa?**
+
+- `{{ source("lab3", "test") }}` to wyrażenie Jinja, które dbt zamienia na pełną ścieżkę do tabeli w BigQuery (w formacie `projekt.dataset.tabela`). Pierwszy argument to nazwa źródła (`name` z pliku YAML), a drugi – nazwa tabeli w tym źródle. Dzięki temu w kodzie nie wpisujesz na stałe nazw projektów i datasetów, a dbt wie, z jakich źródeł korzystają Twoje modele.
+- `row_number() over (partition by id order by updated_at desc)` numeruje wiersze osobno dla każdego `id`: wiersz o najnowszej wartości `updated_at` dostaje numer 1, kolejne starsze – 2, 3 itd.
+- `QUALIFY` to klauzula, która filtruje wiersze na podstawie wyniku funkcji okna. Działa podobnie do `WHERE` (filtrowanie zwykłych kolumn) i `HAVING` (filtrowanie wyników agregacji), ale pozwala użyć funkcji okna bez dodatkowego podzapytania. Warunek `= 1` zostawia tylko najnowszą wersję każdego rekordu.
+- Efekt to właśnie SCD typu 1: każdy rekord występuje raz, w swojej aktualnej wersji.
+
+**Sprawdzenie modelu:**
+
+1. **Zapisz zmiany** w pliku (przycisk **Save** lub skrót Ctrl+S) – dbt kompiluje i uruchamia wyłącznie zapisaną wersję pliku.
+2. Kliknij **Compile**, aby skompilować kod. Sprawdź w skompilowanym SQL-u, czy zamiast `{{ source(...) }}` pojawiła się poprawna ścieżka do tabeli (Twój projekt i dataset).
+3. Kliknij **Preview**, aby zobaczyć dane zwracane przez zapytanie. Sprawdź, czy dla każdego `id` występuje jeden wiersz.
+
+### Zadanie 4. Model SCD2 – historia zmian
+
+W folderze `transform` utwórz plik `trf_<tabela>_scd2.sql` (nazwa jest ważna – odwołuje się do niej kolejny model) z poniższym kodem. Zamień `id`, `name` i `updated_at` na własne kolumny, a w `version_bounds` i w końcowym `select` wypisz własne kolumny opisowe zamiast `name`:
+
+```sql
+{{
+    config(
+        materialized = 'table'
+    )
+}}
+
+-- ekstrakcja daty z timestampu dla kolumny updated_at
+with base as (
+
+    select *, 
+        CAST(DATE(updated_at) AS DATE) as reference_date
+    from {{ source("lab3", "test") }}
+
+),
+
+-- ustalenie ostatniej wersji każdego rekordu dla danego dnia
+last_version_per_day as (
+
+    select *
+    from base
+    qualify row_number() over (partition by id, reference_date order by updated_at desc) = 1
+
+),
+
+-- dodanie kolumn valid_from i valid_to, typowych dla SCD typu 2
+version_bounds as (
+
+    select
+        id,
+        name,
+        reference_date,
+        reference_date as valid_from,
+        lead(reference_date) over (partition by id order by reference_date) - 1 as valid_to
+    from last_version_per_day
+
+)
+
+-- dodanie klucza zastępczego (ang. surrogate key) i flagi aktywnej wersji
+select
+    md5(id || reference_date) as test_sk,
+    id,
+    name,
+    valid_from,
+    valid_to,
+    case when valid_to is null then true else false end as is_active
+from version_bounds
+```
+
+**Blok `config` i materializacje.** Funkcja `config()` ustawia sposób, w jaki dbt utworzy obiekt w bazie. Najważniejszy parametr `materialized` określa **strategię materializacji**:
+
+- `view` (domyślna) – dbt tworzy widok; nie przechowuje danych, zapytanie wykonuje się przy każdym odczycie. Szybkie do utworzenia, ale może być wolne przy dużych danych,
+- `table` – dbt tworzy fizyczną tabelę i przy każdym `dbt run` buduje ją od nowa. Odczyt jest szybki, a budowanie trwa dłużej,
+- `incremental` – tabela jest budowana w całości tylko za pierwszym razem, a kolejne uruchomienia dodają lub aktualizują wyłącznie nowe lub zmienione wiersze. Dobre dla dużych tabel,
+- `ephemeral` – dbt w ogóle nie tworzy obiektu w bazie, a kod modelu jest wstawiany do innych modeli jako CTE.
+
+Ustawienie można podać w pliku modelu (jak tutaj) albo dla całych folderów w pliku `dbt_project.yml`. Ten model jest tabelą, więc po `dbt run` w BigQuery pojawi się tabela, a nie widok.
+
+**Co dzieje się w modelu – krok po kroku:**
+
+1. `base` – pobiera dane ze źródła i dodaje kolumnę `reference_date`, czyli samą datę wyciągniętą z timestampu `updated_at`.
+2. `last_version_per_day` – jeśli rekord zmieniał się kilka razy tego samego dnia, zostawia tylko jego ostatnią wersję z danego dnia (`QUALIFY` z `row_number()`, jak w SCD1, ale z podziałem na `id` **i** dzień).
+3. `version_bounds` – dla każdej wersji wyznacza przedział obowiązywania: `valid_from` to data wersji, a `valid_to` to dzień poprzedzający datę następnej wersji tego samego rekordu. Ostatnia (aktualna) wersja nie ma następnej, więc jej `valid_to` jest puste (`NULL`).
+4. Końcowy `select` – dodaje klucz zastępczy `test_sk`, a także flagę `is_active`, która jest prawdziwa dla aktualnej wersji (czyli tej, która nie ma daty końca).
+
+**Funkcje użyte w modelu:**
+
+- `lead(kolumna) over (partition by id order by reference_date)` to funkcja okna, która zwraca wartość z **następnego** wiersza w obrębie tej samej grupy (tu: tego samego `id`, wiersze uporządkowane po dacie). Dzięki niej w wierszu danej wersji mamy datę następnej wersji, co pozwala wyznaczyć koniec jej ważności. Odpowiednikiem dla poprzedniego wiersza jest `lag()`.
+- `md5(...)` to funkcja skrótu: z dowolnego tekstu wylicza ciąg o stałej długości (tzw. hash), który jest zawsze taki sam dla takich samych danych wejściowych. Tutaj skrót z połączonych `id` i `reference_date` tworzy **klucz zastępczy** (surrogate key) – unikalny identyfikator wersji rekordu. Sam `id` nie wystarcza, bo ten sam `id` występuje w wielu wersjach.
+
+### Zadanie 5. Model SCD2 rozszerzony o zakres dat
+
+W folderze `transform` utwórz plik `trf_<tabela>_scd2_uf.sql` z poniższym kodem. W funkcji `ref()` wpisz nazwę swojego modelu SCD2 z zadania 4, a jeśli klucz zastępczy nazwałeś inaczej niż `test_sk`, popraw go w `except`:
+
+```sql
+-- użycie SCD typu 2 jako bazy
+with base as (
+
+    select * except (test_sk)
+    from {{ ref('trf_test_scd2') }}
+
+),
+
+-- generowanie zakresu dat na podstawie minimalnej i maksymalnej wartości valid_from z SCD typu 2
+dates as (
+
+    SELECT day
+    FROM UNNEST((
+    SELECT GENERATE_DATE_ARRAY(MIN(valid_from), MAX(valid_from))
+    FROM base
+    )) AS day
+
+)
+
+select base.*, dates.day as reference_date
+from base
+    join dates on dates.day between base.valid_from and base.valid_to
+```
+
+**Funkcja `ref()`.** `{{ ref('trf_test_scd2') }}` służy do odwoływania się do **innego modelu dbt** (a nie do tabeli źródłowej, jak `source()`). Tak jak `source()`, jest zamieniana na pełną ścieżkę do obiektu w BigQuery. Dodatkowo dbt na jej podstawie wie, że model SCD2 rozszerzony o zakres dat zależy od modelu SCD2, więc przy `dbt run` zbuduje najpierw model bazowy. Argumentem jest nazwa pliku modelu bez rozszerzenia, dlatego nazwa wpisana w `ref()` musi dokładnie odpowiadać nazwie pliku modelu SCD2 z zadania 4.
+
+**Jak powstaje zakres dat?**
+
+1. `base` – wczytuje model SCD2, pomijając kolumnę klucza zastępczego.
+2. `dates` – `GENERATE_DATE_ARRAY(min, max)` tworzy tablicę kolejnych dat (domyślnie co jeden dzień) od najmniejszej do największej wartości `valid_from`. `UNNEST` rozwija tę tablicę na wiersze, więc powstaje prosta tabela kalendarza z jedną datą (`day`) w wierszu.
+
+**Jak SCD2 jest „rozszerzane” przez zakres dat?** W oryginalnym SCD2 jeden wiersz opisuje jedną wersję rekordu przez przedział `valid_from`–`valid_to`. Ostatni `select` łączy (`JOIN`) tabelę SCD2 z kalendarzem warunkiem `dates.day between base.valid_from and base.valid_to`. Dzięki temu każda wersja rekordu zostaje **powielona dla każdego dnia, w którym obowiązywała**, a kolumna `reference_date` mówi, którego dnia dotyczy dany wiersz. Z modelu „jeden wiersz na wersję” powstaje więc model „jeden wiersz na rekord na dzień”, który wygodnie jest filtrować po konkretnej dacie (np. aby zobaczyć stan danych z wybranego dnia).
+
+### Zadanie 6. Sprawdzenie modeli i uruchomienie
+
+1. Dla każdego z trzech modeli (SCD1, SCD2 i SCD2 rozszerzonego o zakres dat) zapisz zmiany, a następnie użyj **Compile** i **Preview**, aby upewnić się, że kod się kompiluje, ścieżki są poprawne, a dane wyglądają prawidłowo.
+2. Uruchom modele poleceniem `dbt run` (w wierszu poleceń na dole IDE). Możesz uruchomić wszystkie modele naraz albo wskazać konkretne, np. `dbt run --select <model_scd1> <model_scd2> <model_scd2_uf>` (wpisz nazwy swoich modeli).
+3. Wejdź do BigQuery, w dataset `<DATASET_DBT>`, i sprawdź, czy zostały utworzone: widok SCD1, tabela SCD2 oraz widok SCD2 rozszerzonego o zakres dat. Wykonaj na nich proste zapytania i porównaj wyniki z podglądem w dbt.
+
+### Zadanie 7. Commit, merge i powrót na main
+
+1. Kliknij **Commit and sync**, wpisz opis zmian (np. „modele scd1 i scd2”) i zatwierdź na swoim branchu.
+2. Użyj przycisku w dbt, który tworzy pull request na GitHubie, a po otwarciu GitHuba kliknij **Merge pull request** i **Confirm merge** (tak samo jak w kroku 6, część 2).
+3. Wróć do dbt Cloud, wybierz **Change branch** i przełącz się na `main`.
+4. Rozwiń strzałkę przy przycisku **Initialize dbt project** (lub analogicznym przycisku synchronizacji) i wybierz **Pull from remote**, aby pobrać scalone zmiany. Jeśli status w prawym górnym rogu to **Disconnected**, przeładuj stronę.
+
+---
+
+## Najczęstsze problemy
+
+- **`Dataset not found in location ...`** – dataset źródłowy i docelowy mają różne lokalizacje, albo w dbt ustawiono inną lokalizację niż w BigQuery. Ujednolić lokalizację w ustawieniach połączenia (krok 3).
+- **`Access Denied` / brak uprawnień** – sprawdź role konta serwisowego (Data Editor, Job User) i czy klucz JSON pochodzi z właściwego projektu.
+- **Nie można zapisać na gałęzi `main` w IDE** – to zamierzone zachowanie. Utwórz własny branch (np. `dev`), zapisuj zmiany na nim i scalaj go z `main` na GitHubie (krok 6).
+- **Status Disconnected w prawym górnym rogu** – przeładuj stronę.
+- **Brak obiektów w BigQuery po `dbt run`** – sprawdź w panelu Explorer, czy patrzysz w dataset `<DATASET_DBT>` i odśwież listę.
+- **Obiekty zniknęły po wielu tygodniach** – w Sandbox tabele i widoki wygasają po 60 dniach; uruchom `dbt run` ponownie.
