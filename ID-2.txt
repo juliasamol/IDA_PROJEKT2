@@ -1,0 +1,20 @@
+Na wykład: https://www.youtube.com/watch?v=B2qVbsv6RTY
+1. Dodanie do tabel kolumny updated_at typu timestampz
+2. Założenie konta na GitHubie i utworzenie repozytorium
+3. Wejście w Integrations w NeonDB -> Install Github App. Następnie wrócić do Integrations i upewnić się, że podłączone repozytorium jest widoczne
+4. Utworzenie nowego projektu w BigQuery
+5. W BigQuery wejść w lewy panel -> administracja -> konta usługi -> utwórz konto usługi -> nadanie roli BigQuery Data Editor i BigQuery Job User (+ BigQuery Read Session User, gdy dbt v2)
+6. Po utworzeniu wejść w konto usługi -> klucze -> dodaj klucz -> utwórz nowy klucz -> JSON -> pobranie pliku JSON z kluczem, umożliwiającym połączenie Github Actions i BigQuery
+7. Wejść do Githuba -> Settings -> Secret and variables -> Actions
+8. Upewnić się, że NEON_API_KEY tu jest (jeśli nie ma, to trzeba skopiować z Neon), a następnie dodać nowy sekret (GCP_SA_KEY) i przekopiować zawartość pliku JSON
+9. Utworzenie zbioru danych w BigQuery
+10. Utworzenie w repozytorium pliku load.yml bezpośrednio pod ścieżką .github/workflows i uzupełnienie project_id, dataset i table
+11. Utworzenie plików PY i TXT w repozytorium i uzupełnienie source_tabel i incremental_column
+12. Wejście w Actions i wybranie utworzonej akcji -> Run workflow
+13. Sprawdzenie, czy w BigQuery są dane
+14. Wejście do Neon i ręczne dodanie nowego wiersza do tabeli
+15. Zmiana load_mode na incremental w pliku PY
+16. Przejście do actions i ponowne uruchomienie Run workflow
+17. Przekształcić pliki YML i PY, aby umożliwić sekwencyjne ładowanie tabel według relacji PK-FK
+18. Przetestowanie działania zarówno przy dodaniu nowego rekordu, jak i przy zmianie istniejącego
+(*) Dodanie triggera do bazy źródłowej, który będzie automatycznie dodawał aktualny znacznik czasu
