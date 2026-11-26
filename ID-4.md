@@ -1,0 +1,122 @@
+# Instrukcja: testy generyczne w dbt (plik schema.yaml)
+
+Instrukcja pokazuje, jak w dbt opisać modele i ich kolumny oraz dodać do nich podstawowe testy jakości danych: `unique`, `not_null` i `relationships` (odpowiednik klucza obcego). Wszystko robisz w jednym pliku YAML, bez pisania dodatkowego SQL-a.
+
+> Nazwy przycisków i opcji w dbt Cloud mogą się nieznacznie różnić od opisanych poniżej. Sens kroków pozostaje ten sam.
+
+---
+
+## 1. Czym są testy generyczne?
+
+**Test w dbt** to zapytanie SQL, które zwraca wiersze **łamiące** daną regułę. Jeśli zapytanie nie zwróci żadnego wiersza, test kończy się sukcesem (PASS), a jeśli zwróci choć jeden – niepowodzeniem (FAIL).
+
+**Testy generyczne** to gotowe, wielokrotnego użytku testy, które przypisujesz do kolumn w pliku YAML. dbt ma cztery wbudowane testy generyczne, z czego trzy poznasz na tych zajęciach:
+
+- `unique` – wartości w kolumnie nie powtarzają się (szuka duplikatów),
+- `not_null` – w kolumnie nie ma wartości `NULL`,
+- `relationships` – każda wartość w kolumnie istnieje w kolumnie innego modelu (sprawdzenie klucza obcego),
+- `accepted_values` – kolumna zawiera tylko dozwolone wartości (poza zakresem tej instrukcji).
+
+> Testy dbt działają na obiektach już istniejących w BigQuery, więc model musi być wcześniej zbudowany (`dbt run`). Można też użyć `dbt build`, które uruchamia modele i testy po kolei.
+
+---
+
+## 2. Plik schema.yaml
+
+1. W folderze z modelami (np. `models/transform`) utwórz plik `schema.yaml`. Nazwa jest dowolna (często stosuje się `_schema.yaml` lub `_models.yaml`), ważne, aby plik miał rozszerzenie `.yaml` lub `.yml`.
+2. Plik opisuje modele (`models`), ich kolumny (`columns`), a przy kolumnach – opisy (`description`) i testy (`data_tests`).
+3. Opisy trafiają do dokumentacji projektu (dbt docs), więc warto je wypełniać także dla modeli i kolumn bez testów.
+
+### Przykład (modele z laboratorium o SCD)
+
+```yaml
+version: 2
+
+models:
+  - name: trf_test_scd1
+    description: "Ostatnia wersja każdego rekordu (SCD typu 1)."
+    columns:
+      - name: id
+        description: "Klucz biznesowy rekordu."
+        data_tests:
+          - unique
+          - not_null
+      - name: updated_at
+        description: "Data i godzina ostatniej modyfikacji rekordu."
+        data_tests:
+          - not_null
+
+  - name: trf_test_scd2
+    description: "Historia zmian rekordów (SCD typu 2)."
+    columns:
+      - name: test_sk
+        description: "Klucz zastępczy (surrogate key) wersji rekordu."
+        data_tests:
+          - unique
+          - not_null
+      - name: id
+        description: "Klucz biznesowy rekordu (powtarza się w kolejnych wersjach)."
+        data_tests:
+          - not_null
+      - name: valid_from
+        description: "Data początku obowiązywania wersji."
+        data_tests:
+          - not_null
+```
+
+Zwróć uwagę na różnicę: w modelu SCD1 test `unique` dotyczy `id`, bo każdy rekord występuje raz. W modelu SCD2 ten sam `id` występuje w wielu wersjach, więc `unique` stosujemy do klucza zastępczego `test_sk`, a nie do `id`.
+
+### Test klucza obcego (relationships)
+
+Test `relationships` sprawdza, czy każda wartość w kolumnie (klucz obcy w modelu „podrzędnym”) istnieje w kolumnie modelu „nadrzędnego”. Przykład na ogólnych nazwach (dopasuj do własnych modeli):
+
+```yaml
+  - name: trf_zamowienia
+    description: "Zamówienia klientów."
+    columns:
+      - name: klient_id
+        description: "Klucz obcy do tabeli klientów."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('trf_klienci')
+              field: klient_id
+```
+
+- `to` – model nadrzędny (zapisany funkcją `ref()` lub `source()`),
+- `field` – kolumna w modelu nadrzędnym, do której odwołuje się klucz obcy,
+- test szuka wierszy, dla których nie istnieje odpowiednik w modelu nadrzędnym (tzw. „osierocone” rekordy),
+- test **pomija wartości `NULL`**, dlatego jeśli klucz obcy ma być obowiązkowy, dodaj do niego także `not_null`,
+- dbt **nie tworzy** w BigQuery żadnych ograniczeń bazodanowych – to tylko test jakości danych, który sprawdza dane po fakcie.
+
+---
+
+## 3. Uruchamianie testów
+
+W wierszu poleceń na dole dbt Cloud IDE wpisz:
+
+- `dbt test` – uruchamia wszystkie testy w projekcie,
+- `dbt test --select nazwa_modelu` – testy tylko dla wskazanego modelu,
+- `dbt build` – uruchamia modele i testy w kolejności zależności.
+
+Wynik pokazuje dla każdego testu status **PASS** lub **FAIL** (a dla porażki także liczbę wierszy łamiących regułę). Nazwa testu zawiera typ testu, model i kolumnę, np. `unique_trf_test_scd1_id`.
+
+---
+
+## 4. Zadanie
+
+1. Utwórz nowy branch.
+2. W folderze `models/transform` utwórz plik `schema.yaml` i opisz w nim modele, które zbudowałeś na poprzednich laboratoriach: dodaj opisy modeli i wszystkich kolumn.
+3. Dodaj testy: `unique` i `not_null` dla kluczy w swoich modelach (pamiętaj o różnicy między SCD1 i SCD2) oraz co najmniej jeden test `relationships` (klucz obcy), jeśli w swoim modelu masz relację między dwoma modelami.
+4. Uruchom testy poleceniem `dbt test` i sprawdź wyniki.
+5. **Eksperyment:** dodaj celowo test, który powinien się nie powieść (np. `unique` dla kolumny `id` w modelu SCD2). Sprawdź, jak wygląda komunikat o błędzie, a następnie usuń ten test.
+6. Zrób commit, merge pull requesta po stronie GitHuba, a w dbt przejdź na `main` i wykonaj **Pull from remote**.
+
+---
+
+## Najczęstsze problemy
+
+- **Błąd składni YAML** – sprawdź wcięcia (spacje, nie tabulatory) oraz myślniki przed nazwami kolumn i testów.
+- **Test nie znajduje modelu lub kolumny** – nazwa w `name` musi dokładnie odpowiadać nazwie pliku modelu (bez `.sql`) i nazwie kolumny w BigQuery.
+- **Ostrzeżenie o składni testów** – starsze wersje dbt używają klucza `tests:` zamiast `data_tests:`. Nowsze wersje dbt Cloud mogą też zalecać zapisanie parametrów testu (`to`, `field`) w bloku `arguments:`. Jeśli dbt zgłasza ostrzeżenie o składni, zastosuj się do komunikatu.
+- **Test `relationships` zgłasza błędy** – sprawdź, czy w modelu nadrzędnym istnieją wszystkie wartości klucza i czy oba modele zostały zbudowane (`dbt run`).
